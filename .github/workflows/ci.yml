@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: testpassword
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+
+      - name: Download dependencies
+        working-directory: ./services/engine-service
+        run: go mod download
+
+      - name: Run go vet
+        working-directory: ./services/engine-service
+        run: go vet ./...
+
+      - name: Run tests
+        working-directory: ./services/engine-service
+        env:
+          DB_USER: postgres
+          DB_PASSWORD: testpassword
+          DB_NAME: postgres
+          DB_HOST: localhost
+          DB_PORT: 5432
+          SERVER_PORT: 8080
+        run: go test -v ./...
+
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -f ./services/engine-service/Dockerfile -t engine-service:ci .
