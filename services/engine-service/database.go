@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -14,7 +15,7 @@ var db *sql.DB
 
 func InitDB() error {
 	if err := godotenv.Load(); err != nil {
-		fmt.Println("[WARNING]: .env file not found, relying on system environment variables")
+		slog.Warn(".env file not found, relying on system environment variables")
 	}
 
 	connStr := fmt.Sprintf(
@@ -44,12 +45,12 @@ func InitDB() error {
 		return fmt.Errorf("[ERROR]: cannot reach database! Is postgres running? %w", err)
 	}
 
-	fmt.Println("Successfully connected to PostgreSQL!")
+	slog.Info("Successfully connected to PostgreSQL!")
 
 	createTableSql := `
 		CREATE TABLE IF NOT EXISTS orders (
 			id SERIAL PRIMARY KEY,
-			userid INT NOT NULL,
+			user_id INT NOT NULL,
 			stock_name VARCHAR(10) NOT NULL,
 			amount NUMERIC NOT NULL,
 			price NUMERIC NOT NULL,
@@ -62,7 +63,7 @@ func InitDB() error {
 		return fmt.Errorf("[ERROR]: failed to create index on 'stock_name': %w", err)
 	}
 
-	fmt.Println("'orders' table is ready!")
+	slog.Info("'orders' table is ready!")
 
 	createIndexSql := `CREATE INDEX IF NOT EXISTS idx_orders_stock_name ON orders(stock_name);`
 
@@ -70,14 +71,14 @@ func InitDB() error {
 		return fmt.Errorf("[ERROR]: Failed to create index on stock_name: %w", err)
 	}
 
-	fmt.Println("Index on stock_name is ready!")
+	slog.Info("Index on stock_name is ready!")
 
 	return nil
 
 }
 
 func SaveOrderToDB(o *Order) error {
-	query := `INSERT INTO orders (userid, stock_name, amount, price, order_type) 
+	query := `INSERT INTO orders (user_id, stock_name, amount, price, order_type) 
 	          VALUES ($1, $2, $3, $4, $5) RETURNING id`
 
 	err := db.QueryRow(query, o.UserId, o.Stock_name, o.Amount, o.Price, o.Order_type).Scan(&o.Id)
@@ -89,4 +90,56 @@ func UpdateOrderStatus(id int, status string) error {
 
 	_, err := db.Exec(query, status, id)
 	return err
+}
+
+func GetAllOrders() ([]Order, error) {
+	query := `SELECT id, user_id, stock_name, amount, price, order_type, status FROM orders ORDER BY id`
+
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+
+	defer rows.Close()
+
+	orders := make([]Order, 0)
+	for rows.Next() {
+		var o Order
+		if err := rows.Scan(&o.Id, &o.UserId, &o.Stock_name, &o.Amount, &o.Price, &o.Order_type, &o.Status); err != nil {
+			return nil, err
+		}
+		orders = append(orders, o)
+	}
+	return orders, rows.Err()
+}
+
+func GetOrderById(id int) (*Order, error) {
+	query := `SELECT id, user_id, stock_name, amount, price, order_type, status FROM orders WHERE id = $1`
+
+	var o Order
+	err := db.QueryRow(query, id).Scan(&o.Id, &o.UserId, &o.Stock_name, &o.Amount, &o.Price, &o.Order_type, &o.Status)
+	if err != nil {
+		return nil, err
+	}
+	return &o, nil
+}
+
+func CancelOrderInDB(id int) error {
+	query := `UPDATE orders SET status = 'cancelled' WHERE id = $1 AND status = 'pending'`
+
+	result, err := db.Exec(query, id)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("order not found or already processed")
+	}
+
+	return nil
 }
